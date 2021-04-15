@@ -16,7 +16,7 @@ const agentConnection = require('../agentConnection');
 const agentOpts = require('../agent/opts');
 const pidStore = require('../pidStore');
 
-const initialRetryDelay = 10 * 1000; // 10 seconds
+const initialRetryDelay = 1000; // one second
 const backoffFactor = 1.5;
 const maxRetryDelay = 60 * 1000; // one minute
 

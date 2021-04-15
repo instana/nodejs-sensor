@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+- Better support for ephemeral (short lived) processes. With the option `config.tracing.ephemeralProcess: true` (or the environment variable `INSTANA_EPHEMERAL_PROCESS=true`), the behaviour of `@instana/collector` changes to better support ephemeral processes:
+    - Starting to capture spans before a connection to the Instana agent has been established.
+    - Keep the process alive until the spans have been successfully sent to the Instana agent or a timeout has been reached (default timeout is five seconds, configurable via `config.tracing.maxKeepAliveUntilSpanBufferIsEmpty` or environment variable `INSTANA_MAX_KEEP_ALIVE_UNTIL_SPAN_BUFFER_IS_EMPTY`).
+
 ## 1.119.1
  - Fixed a call from collector to the core by using @instana/collector instead of relative path
 

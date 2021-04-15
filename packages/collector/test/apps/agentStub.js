@@ -25,6 +25,8 @@ const dropAllData = process.env.DROP_DATA === 'true';
 const logTraces = process.env.LOG_TRACES === 'true';
 const logProfiles = process.env.LOG_PROFILES === 'true';
 const rejectTraces = process.env.REJECT_TRACES === 'true';
+const startUpDelay = process.env.STARTUP_DELAY ? parseInt(process.env.STARTUP_DELAY, 10) : null;
+const startTime = Date.now();
 const doesntHandleProfiles = process.env.DOESNT_HANDLE_PROFILES === 'true';
 const tracingMetrics = process.env.TRACING_METRICS !== 'false';
 const enableSpanBatching = process.env.ENABLE_SPANBATCHING === 'true';
@@ -37,7 +39,8 @@ let receivedData = resetReceivedData();
 // We usually do not activate morgan in the agent stub because it creates a lot of noise with little benefit. Activate
 // it on demand if required.
 // if (process.env.WITH_STDOUT) {
-//   app.use(morgan(`Agent Stub (${process.pid}):\t:method :url :status`));
+//   app.use(morgan(`> Agent Stub [:date[iso]] (${process.pid}):\t:method :url`, { immediate: true }));
+//   app.use(morgan(`< Agent Stub [:date[iso]] (${process.pid}):\t:method :url :status`));
 // }
 
 app.use(
@@ -61,6 +64,11 @@ app.put('/com.instana.plugin.nodejs.discovery', (req, res) => {
   if (rejectAnnounceAttempts > 0) {
     rejectAnnounceAttempts--;
     logger.debug('Rejecting new discovery %s announce attempt test retry mechanism', pid);
+    return res.sendStatus(404);
+  }
+
+  if (startUpDelay && Date.now() - startTime < startUpDelay) {
+    logger.warn('Rejecting new discovery announce attempt due to artificial startup delay', pid);
     return res.sendStatus(404);
   }
 
@@ -95,37 +103,53 @@ app.head(
 app.post(
   '/com.instana.plugin.nodejs.:pid',
   checkExistenceOfKnownPid(function handleEntityData(req, res) {
+    const pid = req.params.pid;
+
+    if (startUpDelay && Date.now() - startTime < startUpDelay) {
+      logger.warn('Rejecting entity data for pid %s due to artificial startup delay.', pid);
+      return res.sendStatus(404);
+    }
+
     if (!dropAllData) {
       receivedData.metrics.push({
-        pid: parseInt(req.params.pid, 10),
+        pid: parseInt(pid, 10),
         time: Date.now(),
         data: req.body
       });
       aggregateMetrics(req.params.pid, req.body);
     }
 
-    const requestsForPid = requests[req.params.pid] || [];
+    const requestsForPid = requests[pid] || [];
     res.json(requestsForPid);
-    delete requests[req.params.pid];
+    delete requests[pid];
   })
 );
 
 app.post(
   '/com.instana.plugin.nodejs/traces.:pid',
   checkExistenceOfKnownPid(function handleTraces(req, res) {
+    const pid = req.params.pid;
+
     if (rejectTraces) {
       return res.sendStatus(400);
     }
+
+    if (startUpDelay && Date.now() - startTime < startUpDelay) {
+      logger.warn('Rejecting spans for pid %s due to artificial startup delay.', pid);
+      return res.sendStatus(404);
+    }
+
     if (!dropAllData) {
       receivedData.traces.push({
-        pid: parseInt(req.params.pid, 10),
+        pid: parseInt(pid, 10),
         time: Date.now(),
         data: req.body
       });
     }
     if (logTraces) {
-      /* eslint-disable no-console */
+      // eslint-disable-next-line no-console
       console.log(JSON.stringify(req.body, null, 2));
+      // eslint-disable-next-line no-console
       console.log('--\n');
     }
     res.send('OK');
@@ -135,19 +159,28 @@ app.post(
 app.post(
   '/com.instana.plugin.nodejs/profiles.:pid',
   checkExistenceOfKnownPid(function handleProfiles(req, res) {
+    const pid = req.params.pid;
+
     if (doesntHandleProfiles) {
       return res.sendStatus(404);
     }
+
+    if (startUpDelay && Date.now() - startTime < startUpDelay) {
+      logger.warn('Rejecting profiles for pid %s due to artificial startup delay.', pid);
+      return res.sendStatus(404);
+    }
+
     if (!dropAllData) {
       receivedData.profiles.push({
-        pid: parseInt(req.params.pid, 10),
+        pid: parseInt(pid, 10),
         time: Date.now(),
         data: req.body
       });
     }
     if (logProfiles) {
-      /* eslint-disable no-console */
+      // eslint-disable-next-line no-console
       console.log(JSON.stringify(req.body, null, 2));
+      // eslint-disable-next-line no-console
       console.log('--\n');
     }
     res.send('OK');

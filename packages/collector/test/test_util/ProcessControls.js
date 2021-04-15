@@ -130,7 +130,7 @@ class ProcessControls {
     if (!this.agentControls && this.useGlobalAgent) {
       this.agentControls = globalAgent.instance;
     }
-    const agentPort = this.agentControls ? this.agentControls.agentPort : undefined;
+    const agentPort = opts.agentPort || (this.agentControls ? this.agentControls.agentPort : undefined);
 
     this.env = _.assign(
       {},
@@ -154,8 +154,8 @@ class ProcessControls {
   /**
    * The _legacy_ convenience method used by tests that start and stop the app under test before/after each test case.
    * If possible, this should be avoided in new tests. Instead, use the static methods of this class named setUpHooks
-   * and its to start the app under test once for a whole suite. This is crucial to keep the duration of the whole test
-   * suite on CI under control.
+   * and its variants to start the app under test once for a whole suite. This is crucial to keep the duration of the
+   * whole test suite on CI under control.
    */
   registerTestHooks(retryTime) {
     if (this.agentControls) {

@@ -56,6 +56,9 @@ class AgentStubControls {
     if (opts.enableSpanBatching) {
       env.ENABLE_SPANBATCHING = 'true';
     }
+    if (opts.startUpDelay) {
+      env.STARTUP_DELAY = opts.startUpDelay;
+    }
 
     this.agentStub = spawn('node', [path.join(__dirname, 'agentStub.js')], {
       stdio: config.getAppStdio(),

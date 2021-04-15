@@ -80,16 +80,20 @@ exports.announceNodeCollector = function announceNodeCollector(cb) {
       }
     },
     res => {
-      if (res.statusCode < 200 || res.statusCode >= 300) {
-        cb(new Error(`Announce to agent failed with status code ${res.statusCode}`));
-        return;
-      }
-
+      // We need to consume the response data not matter which status code we get. Otherwise the Node.js http module
+      // will treat requests that end with a non-2XX status code as pending forever and the underlying socket will
+      // not be put back into the pool.
       res.setEncoding('utf8');
       let responseBody = '';
       res.on('data', chunk => {
         responseBody += chunk;
       });
+
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        cb(new Error(`Announce to agent failed with status code ${res.statusCode}`));
+        return;
+      }
+
       res.on('end', () => {
         cb(null, responseBody);
       });
@@ -148,6 +152,11 @@ function checkWhetherResponseForPathIsOkay(path, cb) {
       method: 'HEAD'
     },
     res => {
+      // We need to consume the response data not matter which status code we get. Otherwise the Node.js http module
+      // will treat requests with unconsomed data events as pending forever and the underlying socket will not be put
+      // back into the pool.
+      res.on('data', () => {});
+
       isConnected = 199 < res.statusCode && res.statusCode < 300;
       cb(isConnected);
       res.resume();
@@ -287,6 +296,15 @@ function sendData(path, data, cb, ignore404) {
       }
     },
     res => {
+      // We need to consume the response data not matter which status code we get. Otherwise the Node.js http module
+      // will treat requests that end with a non-2XX status code as pending forever and the underlying socket will
+      // not be put back into the pool.
+      res.setEncoding('utf8');
+      let responseBody = '';
+      res.on('data', chunk => {
+        responseBody += chunk;
+      });
+
       if (res.statusCode < 200 || res.statusCode >= 300) {
         if (res.statusCode !== 404 || !ignore404) {
           const statusCodeError = new Error(
@@ -298,11 +316,6 @@ function sendData(path, data, cb, ignore404) {
         }
       }
 
-      res.setEncoding('utf8');
-      let responseBody = '';
-      res.on('data', chunk => {
-        responseBody += chunk;
-      });
       res.on('end', () => {
         cb(null, responseBody);
       });

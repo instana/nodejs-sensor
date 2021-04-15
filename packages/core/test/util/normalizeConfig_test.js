@@ -20,6 +20,7 @@ describe('util.normalizeConfig', () => {
     delete process.env.INSTANA_TRACE_IMMEDIATELY;
     delete process.env.INSTANA_EXTRA_HTTP_HEADERS;
     delete process.env.INSTANA_FORCE_TRANSMISSION_STARTING_AT;
+    delete process.env.INSTANA_EPHEMERAL_PROCESS;
     delete process.env.INSTANA_METRICS_TRANSMISSION_DELAY;
     delete process.env.INSTANA_SECRETS;
     delete process.env.INSTANA_SERVICE_NAME;
@@ -28,6 +29,8 @@ describe('util.normalizeConfig', () => {
     delete process.env.INSTANA_SPANBATCHING_ENABLED;
     delete process.env.INSTANA_DISABLE_SPANBATCHING;
     delete process.env.INSTANA_DISABLE_W3C_TRACE_CORRELATION;
+    delete process.env.INSTANA_COPY_PRECOMPILED_NATIVE_ADDONS;
+    delete process.env.INSTANA_REBUILD_NATIVE_ADDONS_ON_DEMAND;
   }
 
   it('should apply all defaults', () => {
@@ -341,6 +344,110 @@ describe('util.normalizeConfig', () => {
     expect(config.tracing.disableW3cTraceCorrelation).to.be.true;
   });
 
+  it('should enable ephemeral process settings via config', () => {
+    const config = normalizeConfig({ tracing: { ephemeralProcess: true } });
+    expect(config.tracing.ephemeralProcess).to.be.true;
+    expect(config.tracing.activateImmediately).to.be.true;
+    expect(config.tracing.forceTransmissionStartingAt).to.equal(1);
+    expect(config.tracing.maxKeepAliveUntilSpanBufferIsEmpty).to.equal(5000);
+    expect(process.env.INSTANA_COPY_PRECOMPILED_NATIVE_ADDONS).to.equal('false');
+    expect(process.env.INSTANA_REBUILD_NATIVE_ADDONS_ON_DEMAND).to.equal('false');
+  });
+
+  it('should enable ephemeral process settings via INSTANA_EPHEMERAL_PROCESS', () => {
+    process.env.INSTANA_EPHEMERAL_PROCESS = 'true';
+    const config = normalizeConfig();
+    expect(config.tracing.ephemeralProcess).to.be.true;
+    expect(config.tracing.activateImmediately).to.be.true;
+    expect(config.tracing.forceTransmissionStartingAt).to.equal(1);
+    expect(config.tracing.maxKeepAliveUntilSpanBufferIsEmpty).to.equal(5000);
+    expect(process.env.INSTANA_COPY_PRECOMPILED_NATIVE_ADDONS).to.equal('false');
+    expect(process.env.INSTANA_REBUILD_NATIVE_ADDONS_ON_DEMAND).to.equal('false');
+  });
+
+  it('should ignore non-boolean ephemeral process config value', () => {
+    const config = normalizeConfig({ tracing: { ephemeralProcess: 73 } });
+    expect(config.tracing.ephemeralProcess).to.be.false;
+    expect(config.tracing.activateImmediately).to.be.false;
+    expect(config.tracing.forceTransmissionStartingAt).to.equal(500);
+    expect(config.tracing.maxKeepAliveUntilSpanBufferIsEmpty).to.equal(0);
+    expect(process.env.INSTANA_COPY_PRECOMPILED_NATIVE_ADDONS).to.not.exist;
+    expect(process.env.INSTANA_REBUILD_NATIVE_ADDONS_ON_DEMAND).to.not.exist;
+  });
+
+  it('should be able to override activateImmediately when ephemeral process is set', () => {
+    const config = normalizeConfig({
+      tracing: {
+        ephemeralProcess: true,
+        activateImmediately: false
+      }
+    });
+    expect(config.tracing.ephemeralProcess).to.be.true;
+    expect(config.tracing.activateImmediately).to.be.false;
+    expect(config.tracing.forceTransmissionStartingAt).to.equal(1);
+    expect(config.tracing.maxKeepAliveUntilSpanBufferIsEmpty).to.equal(5000);
+  });
+
+  it('should be able to override forceTransmissionStartingAt when ephemeral process is set', () => {
+    const config = normalizeConfig({
+      tracing: {
+        ephemeralProcess: true,
+        forceTransmissionStartingAt: 10
+      }
+    });
+    expect(config.tracing.ephemeralProcess).to.be.true;
+    expect(config.tracing.activateImmediately).to.be.true;
+    expect(config.tracing.forceTransmissionStartingAt).to.equal(10);
+    expect(config.tracing.maxKeepAliveUntilSpanBufferIsEmpty).to.equal(5000);
+  });
+
+  it('should be able to override maxKeepAliveUntilSpanBufferIsEmpty when ephemeral process is set', () => {
+    const config = normalizeConfig({
+      tracing: {
+        ephemeralProcess: true,
+        maxKeepAliveUntilSpanBufferIsEmpty: 3000
+      }
+    });
+    expect(config.tracing.ephemeralProcess).to.be.true;
+    expect(config.tracing.activateImmediately).to.be.true;
+    expect(config.tracing.forceTransmissionStartingAt).to.equal(1);
+    expect(config.tracing.maxKeepAliveUntilSpanBufferIsEmpty).to.equal(3000);
+  });
+
+  it('should be able to override INSTANA_TRACE_IMMEDIATELY when INSTANA_EPHEMERAL_PROCESS is set', () => {
+    process.env.INSTANA_EPHEMERAL_PROCESS = 'true';
+    process.env.INSTANA_TRACE_IMMEDIATELY = 'false';
+    const config = normalizeConfig();
+    expect(config.tracing.ephemeralProcess).to.be.true;
+    expect(config.tracing.activateImmediately).to.be.false;
+    expect(config.tracing.forceTransmissionStartingAt).to.equal(1);
+    expect(config.tracing.maxKeepAliveUntilSpanBufferIsEmpty).to.equal(5000);
+  });
+
+  it('should be able to override INSTANA_FORCE_TRANSMISSION_STARTING_AT when INSTANA_EPHEMERAL_PROCESS is set', () => {
+    process.env.INSTANA_EPHEMERAL_PROCESS = 'true';
+    process.env.INSTANA_FORCE_TRANSMISSION_STARTING_AT = '10';
+    const config = normalizeConfig();
+    expect(config.tracing.ephemeralProcess).to.be.true;
+    expect(config.tracing.activateImmediately).to.be.true;
+    expect(config.tracing.forceTransmissionStartingAt).to.equal(10);
+    expect(config.tracing.maxKeepAliveUntilSpanBufferIsEmpty).to.equal(5000);
+  });
+
+  it(
+    'should be able to override INSTANA_MAX_KEEP_ALIVE_UNTIL_SPAN_BUFFER_IS_EMPTY when ' +
+      'INSTANA_EPHEMERAL_PROCESS is set',
+    () => {
+      process.env.INSTANA_EPHEMERAL_PROCESS = 'true';
+      process.env.INSTANA_MAX_KEEP_ALIVE_UNTIL_SPAN_BUFFER_IS_EMPTY = '7000';
+      const config = normalizeConfig();
+      expect(config.tracing.ephemeralProcess).to.be.true;
+      expect(config.tracing.activateImmediately).to.be.true;
+      expect(config.tracing.forceTransmissionStartingAt).to.equal(1);
+      expect(config.tracing.maxKeepAliveUntilSpanBufferIsEmpty).to.equal(7000);
+    }
+  );
+
   it('should accept custom secrets config', () => {
     const config = normalizeConfig({
       secrets: {
@@ -423,6 +530,8 @@ describe('util.normalizeConfig', () => {
     expect(config.tracing.forceTransmissionStartingAt).to.equal(500);
     expect(config.tracing.maxBufferedSpans).to.equal(1000);
     expect(config.tracing.disabledTracers).to.deep.equal([]);
+    expect(config.tracing.ephemeralProcess).to.be.false;
+    expect(config.tracing.maxKeepAliveUntilSpanBufferIsEmpty).to.equal(0);
     expect(config.tracing.http).to.be.an('object');
     expect(config.tracing.http.extraHttpHeadersToCapture).to.be.empty;
     expect(config.tracing.http.extraHttpHeadersToCapture).to.be.an('array');

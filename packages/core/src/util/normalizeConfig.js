@@ -22,12 +22,14 @@ const supportedTracingVersion = require('../tracing/supportedVersion');
  * @property {number} [forceTransmissionStartingAt]
  * @property {number} [maxBufferedSpans]
  * @property {number} [transmissionDelay]
+ * @property {number} [maxKeepAliveUntilSpanBufferIsEmpty]
  * @property {number} [stackTraceLength]
  * @property {HTTPTracingOption} [http]
  * @property {Array<*>} [disabledTracers]
  * @property {boolean} [spanBatchingEnabled]
  * @property {boolean} [disableAutomaticTracing]
  * @property {boolean} [disableW3cTraceCorrelation]
+ * @property {boolean} [ephemeralProcess]
  */
 
 /**
@@ -49,6 +51,7 @@ const supportedTracingVersion = require('../tracing/supportedVersion');
  * @property {InstanaTracingOption} [tracing]
  * @property {InstanaSecretsOption} [secrets]
  * @property {number} [timeBetweenHealthcheckCalls]
+ * @property {boolean} [ephemeralProcess]
  */
 
 /** @type {import('../logger').GenericLogger} */
@@ -72,13 +75,15 @@ const defaults = {
     forceTransmissionStartingAt: 500,
     maxBufferedSpans: 1000,
     transmissionDelay: 1000,
+    maxKeepAliveUntilSpanBufferIsEmpty: 0,
     http: {
       extraHttpHeadersToCapture: []
     },
     stackTraceLength: 10,
     disabledTracers: [],
     spanBatchingEnabled: false,
-    disableW3cTraceCorrelation: false
+    disableW3cTraceCorrelation: false,
+    ephemeralProcess: false
   },
   secrets: {
     matcherMode: 'contains-ignore-case',
@@ -158,6 +163,7 @@ function normalizeTracingConfig(config) {
   }
   normalizeTracingEnabled(config);
   normalizeAutomaticTracingEnabled(config);
+  normalizeEphemeralProcess(config);
   normalizeActivateImmediately(config);
   normalizeTracingTransmission(config);
   normalizeTracingHttp(config);
@@ -230,6 +236,48 @@ function normalizeAutomaticTracingEnabled(config) {
 /**
  * @param {InstanaConfig} config
  */
+function normalizeEphemeralProcess(config) {
+  if (!config.tracing.enabled) {
+    config.tracing.ephemeralProcess = false;
+    return;
+  }
+
+  if (config.tracing.ephemeralProcess != null) {
+    if (typeof config.tracing.ephemeralProcess === 'boolean') {
+      if (config.tracing.ephemeralProcess) {
+        logger.info('Optimized trace settings for an ephemeral process are enabled via config.');
+      }
+      disableNativeAddonRetries();
+      return;
+    } else {
+      logger.warn(
+        `Invalid configuration: config.tracing.ephemeralProcess is not a boolean value, will be ignored: ${JSON.stringify(
+          config.tracing.ephemeralProcess
+        )}`
+      );
+    }
+  }
+
+  if (process.env['INSTANA_EPHEMERAL_PROCESS'] === 'true') {
+    logger.info(
+      'Optimized trace settings for an ephemeral process are enabled via environment variable INSTANA_EPHEMERAL_PROCESS.'
+    );
+    config.tracing.ephemeralProcess = true;
+    disableNativeAddonRetries();
+    return;
+  }
+
+  config.tracing.ephemeralProcess = defaults.tracing.ephemeralProcess;
+}
+
+function disableNativeAddonRetries() {
+  process.env.INSTANA_COPY_PRECOMPILED_NATIVE_ADDONS = 'false';
+  process.env.INSTANA_REBUILD_NATIVE_ADDONS_ON_DEMAND = 'false';
+}
+
+/**
+ * @param {InstanaConfig} config
+ */
 function normalizeActivateImmediately(config) {
   if (!config.tracing.enabled) {
     config.tracing.activateImmediately = false;
@@ -241,6 +289,16 @@ function normalizeActivateImmediately(config) {
   }
 
   if (process.env['INSTANA_TRACE_IMMEDIATELY'] === 'true') {
+    config.tracing.activateImmediately = true;
+    return;
+  }
+
+  if (process.env['INSTANA_TRACE_IMMEDIATELY'] === 'false') {
+    config.tracing.activateImmediately = false;
+    return;
+  }
+
+  if (config.tracing.ephemeralProcess) {
     config.tracing.activateImmediately = true;
     return;
   }
@@ -261,12 +319,35 @@ function normalizeTracingTransmission(config) {
     'INSTANA_TRACING_TRANSMISSION_DELAY'
   );
 
-  config.tracing.forceTransmissionStartingAt = normalizeSingleValue(
-    config.tracing.forceTransmissionStartingAt,
-    defaults.tracing.forceTransmissionStartingAt,
-    'config.tracing.forceTransmissionStartingAt',
-    'INSTANA_FORCE_TRANSMISSION_STARTING_AT'
-  );
+  if (
+    config.tracing.forceTransmissionStartingAt == null &&
+    process.env.INSTANA_FORCE_TRANSMISSION_STARTING_AT == null &&
+    config.tracing.ephemeralProcess
+  ) {
+    config.tracing.forceTransmissionStartingAt = 1;
+  } else {
+    config.tracing.forceTransmissionStartingAt = normalizeSingleValue(
+      config.tracing.forceTransmissionStartingAt,
+      defaults.tracing.forceTransmissionStartingAt,
+      'config.tracing.forceTransmissionStartingAt',
+      'INSTANA_FORCE_TRANSMISSION_STARTING_AT'
+    );
+  }
+
+  if (
+    config.tracing.maxKeepAliveUntilSpanBufferIsEmpty == null &&
+    process.env.INSTANA_MAX_KEEP_ALIVE_UNTIL_SPAN_BUFFER_IS_EMPTY == null &&
+    config.tracing.ephemeralProcess
+  ) {
+    config.tracing.maxKeepAliveUntilSpanBufferIsEmpty = 5000;
+  } else {
+    config.tracing.maxKeepAliveUntilSpanBufferIsEmpty = normalizeSingleValue(
+      config.tracing.maxKeepAliveUntilSpanBufferIsEmpty,
+      defaults.tracing.maxKeepAliveUntilSpanBufferIsEmpty,
+      'config.tracing.maxKeepAliveUntilSpanBufferIsEmpty',
+      'INSTANA_MAX_KEEP_ALIVE_UNTIL_SPAN_BUFFER_IS_EMPTY'
+    );
+  }
 }
 
 /**

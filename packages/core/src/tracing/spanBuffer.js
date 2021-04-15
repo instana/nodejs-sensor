@@ -33,6 +33,11 @@ let transmissionTimeoutHandle;
 
 let preActivationCleanupIntervalHandle;
 
+let maxKeepAliveUntilSpanBufferIsEmpty;
+const keepAliveCheckDelay = 100;
+let keepEphemeralProcessAliveHandle;
+let spanRequestInFlight = false;
+
 let spans = [];
 
 let batchThreshold = 10;
@@ -78,6 +83,8 @@ exports.init = function init(config, _downstreamConnection) {
     }, transmissionDelay);
     preActivationCleanupIntervalHandle.unref();
   }
+
+  maxKeepAliveUntilSpanBufferIsEmpty = config.tracing.maxKeepAliveUntilSpanBufferIsEmpty;
 };
 
 exports.activate = function activate() {
@@ -147,6 +154,10 @@ exports.addSpan = function(span) {
 
     if (spans.length >= forceTransmissionStartingAt && Date.now() - minDelayBeforeSendingSpans > activatedAt) {
       transmitSpans();
+    }
+
+    if (maxKeepAliveUntilSpanBufferIsEmpty > 0 && keepEphemeralProcessAliveHandle == null) {
+      triggerEphemeralProcessKeepAliveTimeout();
     }
   }
 };
@@ -336,6 +347,7 @@ function transmitSpans() {
 
   const spansToSend = spans;
   spans = [];
+  spanRequestInFlight = true;
   batchingBuckets.clear();
   // We restore the content of the spans array if sending them downstream was not successful. We do not restore
   // batchingBuckets, though. This is deliberate. In the worst case, we might miss some batching opportunities, but
@@ -347,10 +359,42 @@ function transmitSpans() {
       spans = spans.concat(spansToSend);
       removeSpansIfNecessary();
     }
+    spanRequestInFlight = false;
 
     transmissionTimeoutHandle = setTimeout(transmitSpans, transmissionDelay);
     transmissionTimeoutHandle.unref();
   });
+}
+
+/**
+ * Starts a keep alive loop to improve the chances that we can offload all spans to the agent for an ephemeral process.
+ */
+function triggerEphemeralProcessKeepAliveTimeout() {
+  const startedAt = Date.now();
+  keepEphemeralProcessAliveHandle = setTimeout(() => waitForEmptySpanBuffer(startedAt), keepAliveCheckDelay);
+}
+
+function waitForEmptySpanBuffer(startedAt) {
+  if (Date.now() - maxKeepAliveUntilSpanBufferIsEmpty > startedAt) {
+    // We waited for the buffer to become empty (that is, for all spans being offloaded to the agent) but now the max
+    // waiting time has been reached, so we stop waiting (by not triggering waitForEmptySpanBuffer again).
+    keepEphemeralProcessAliveHandle = null;
+    return;
+  }
+
+  if (spanRequestInFlight) {
+    // While a span request is in flight, the isEmpty() check is not valid, because we reset the spans array to an empty
+    // array before the request is started, and only put the spans back into the buffer if we find out that we could not
+    // successfully send them to the agent. Thus, we just skip this check and schedule the next check.
+    keepEphemeralProcessAliveHandle = setTimeout(() => waitForEmptySpanBuffer(startedAt), keepAliveCheckDelay);
+  } else if (exports.isEmpty()) {
+    // We waited for the buffer to become empty (that is, for all spans being offloaded to the agent) and that has
+    // happened now.
+    keepEphemeralProcessAliveHandle = null;
+  } else {
+    // The span buffer is not empty yet but we also have not waited the maximum wait time; schedule the next check.
+    keepEphemeralProcessAliveHandle = setTimeout(() => waitForEmptySpanBuffer(startedAt), keepAliveCheckDelay);
+  }
 }
 
 /**
