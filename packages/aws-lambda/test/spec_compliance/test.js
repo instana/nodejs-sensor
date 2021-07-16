@@ -7,18 +7,23 @@
 
 const path = require('path');
 const { expect } = require('chai');
-const semver = require('semver');
-
-const supportedVersion = require('@instana/core').tracing.supportedVersion;
 const constants = require('@instana/core').tracing.constants;
-const config = require('../../../../../core/test/config');
-const { delay, expectExactlyOneMatching, retryUntilSpansMatch } = require('../../../../../core/test/test_util');
-const ProcessControls = require('../../../test_util/ProcessControls');
-const globalAgent = require('../../../globalAgent');
 
-const agentControls = globalAgent.instance;
+const Control = require('../Control');
+const config = require('../../../serverless/test/config');
+const delay = require('../../../core/test/test_util/delay');
+const expectExactlyOneMatching = require('../../../core/test/test_util/expectExactlyOneMatching');
+const retry = require('../../../serverless/test/util/retry');
 
-const allTestCases = require('./tracer_compliance_test_cases.json'); /* .slice(0, 1); */ // in lieu of .only
+const { fail } = expect;
+
+const backendPort = 8443;
+const backendBaseUrl = `https://localhost:${backendPort}/serverless`;
+const downstreamDummyPort = 3456;
+const downstreamDummyUrl = `http://localhost:${downstreamDummyPort}/`;
+const instanaAgentKey = 'aws-lambda-dummy-key';
+
+const allTestCases = require('../../../collector/test/tracing/misc/spec_compliance/tracer_compliance_test_cases.json');
 
 const testCasesWithW3cTraceCorrelation = [];
 const testCasesWithoutW3cTraceCorrelation = [];
@@ -30,144 +35,117 @@ allTestCases.forEach(testDefinition => {
   }
 });
 
-const appPort = 3215;
-const downstreamPort = 3216;
-
-describe('spec compliance', function () {
+describe('AWS Lambda spec compliance', function () {
   this.timeout(config.getTestTimeout());
 
-  globalAgent.setUpCleanUpHooks();
+  [false, true].forEach(w3cTraceCorrelationDisabled => {
+    registerSuite(w3cTraceCorrelationDisabled);
+  });
+});
 
-  [false, true].forEach(http2 => {
-    const mochaSuiteFn =
-      supportedVersion(process.versions.node) && (!http2 || semver.gte(process.versions.node, '10.0.0'))
-        ? describe
-        : describe.skip;
+function registerSuite(w3cTraceCorrelationDisabled) {
+  describe('compliance test suite', () => {
+    const env = {
+      INSTANA_ENDPOINT_URL: backendBaseUrl,
+      INSTANA_AGENT_KEY: instanaAgentKey,
+      LAMBDA_TRIGGER: 'api-gateway-proxy'
+    };
 
-    mochaSuiteFn(`compliance test suite (${http2 ? 'HTTP2' : 'HTTP1'})`, () => {
-      const downstreamTarget = new ProcessControls({
-        appPath: path.join(__dirname, 'downstreamTarget'),
-        port: downstreamPort,
-        useGlobalAgent: true,
-        http2,
-        env: {
-          USE_HTTP2: http2
+    let testCases;
+    if (w3cTraceCorrelationDisabled) {
+      env.INSTANA_DISABLE_W3C_TRACE_CORRELATION = 'a non-empty string';
+      testCases = testCasesWithoutW3cTraceCorrelation;
+    } else {
+      testCases = testCasesWithW3cTraceCorrelation;
+    }
+
+    const control = new Control({
+      faasRuntimePath: path.join(__dirname, '../runtime_mock'),
+      handlerDefinitionPath: path.join(__dirname, './lambda.js'),
+      startBackend: true,
+      backendPort,
+      backendBaseUrl,
+      downstreamDummyUrl,
+      env
+    });
+    control.registerTestHooks();
+
+    testCases.forEach(testDefinition => {
+      const label =
+        `${testDefinition.index}: ${testDefinition['Scenario/incoming headers']} -> ` +
+        `${testDefinition['What to do?']}`;
+      it(label, async () => {
+        const valuesForPlaceholders = {};
+        const headers = {};
+        [
+          'X-INSTANA-T in',
+          'X-INSTANA-S in',
+          'X-INSTANA-L in',
+          'X-INSTANA-SYNTHETIC in',
+          'traceparent in',
+          'tracestate in'
+        ].forEach(headerName => {
+          const actualHeaderName = headerName.slice(0, -3);
+          const headerValue = testDefinition[headerName];
+          if (headerValue) {
+            headers[actualHeaderName] = headerValue;
+            // eslint-disable-next-line no-console
+            console.log(`setting ${actualHeaderName} to ${headerValue}`);
+          } else {
+            // eslint-disable-next-line no-console
+            console.log(`not setting ${actualHeaderName}`);
+          }
+        });
+
+        const suppressed = testDefinition['X-INSTANA-L in'] === '0';
+
+        await control.runHandler({
+          event: {
+            resource: '/start',
+            path: '/start',
+            httpMethod: 'POST',
+            headers
+          }
+        });
+
+        const errors = control.getLambdaErrors();
+        if (errors.length > 0) {
+          fail(`The Lambda invocation produced unexpected errors ${JSON.stringify(errors, null, 2)}`);
         }
-      });
-      before(() => downstreamTarget.start());
-      after(() => downstreamTarget.stop());
+        const results = control.getLambdaResults();
+        expect(results).is.an('array');
+        expect(results).to.have.length(1);
+        const response = results[0];
 
-      [false, true].forEach(w3cTraceCorrelationDisabled => {
-        registerSuite(downstreamTarget, http2, w3cTraceCorrelationDisabled);
+        const expectedServerTimingValue = testDefinition['Server-Timing'];
+        const responseHeaders = response.headers || {};
+        const actualServerTimingValue = responseHeaders['Server-Timing'];
+        if (expectedServerTimingValue && expectedServerTimingValue.includes('$')) {
+          expect(actualServerTimingValue).to.exist;
+          parseForPlaceholders(valuesForPlaceholders, expectedServerTimingValue, actualServerTimingValue);
+          expect(actualServerTimingValue).to.exist;
+        } else if (expectedServerTimingValue) {
+          expect(actualServerTimingValue).to.equal(expectedServerTimingValue);
+        }
+
+        const responseBody = response.body;
+        verifyHttpHeadersOnDownstreamRequest(testDefinition, valuesForPlaceholders, responseBody);
+
+        if (suppressed) {
+          await delay(500);
+          const spans = await control.getSpans();
+          expect(spans).to.have.lengthOf(0);
+        } else {
+          await retry(async () => {
+            const spans = await control.getSpans();
+            verifyHttpEntry(testDefinition, valuesForPlaceholders, spans, '/start');
+            verifyHttpExit(testDefinition, valuesForPlaceholders, spans);
+          });
+        }
       });
     });
   });
-
-  function registerSuite(downstreamTarget, http2, w3cTraceCorrelationDisabled) {
-    describe(`compliance test suite (${http2 ? 'HTTP2' : 'HTTP1'})`, () => {
-      const env = {
-        USE_HTTP2: http2,
-        DOWNSTREAM_PORT: downstreamPort
-      };
-
-      let testCases;
-      if (w3cTraceCorrelationDisabled) {
-        env.INSTANA_DISABLE_W3C_TRACE_CORRELATION = 'a non-empty string';
-        testCases = testCasesWithoutW3cTraceCorrelation;
-      } else {
-        testCases = testCasesWithW3cTraceCorrelation;
-      }
-
-      const app = new ProcessControls({
-        dirname: __dirname,
-        port: appPort,
-        useGlobalAgent: true,
-        http2,
-        env
-      });
-      ProcessControls.setUpHooks(app);
-
-      testCases.forEach(testDefinition => {
-        const label =
-          `${testDefinition.index}: ${testDefinition['Scenario/incoming headers']} -> ` +
-          `${testDefinition['What to do?']}`;
-        it(label, async () => {
-          const valuesForPlaceholders = {};
-          const headers = {};
-          [
-            'X-INSTANA-T in',
-            'X-INSTANA-S in',
-            'X-INSTANA-L in',
-            'X-INSTANA-SYNTHETIC in',
-            'traceparent in',
-            'tracestate in'
-          ].forEach(headerName => {
-            const actualHeaderName = headerName.slice(0, -3);
-            const headerValue = testDefinition[headerName];
-            if (headerValue) {
-              headers[actualHeaderName] = headerValue;
-              // eslint-disable-next-line no-console
-              console.log(`setting ${actualHeaderName} to ${headerValue}`);
-            } else {
-              // eslint-disable-next-line no-console
-              console.log(`not setting ${actualHeaderName}`);
-            }
-          });
-
-          const suppressed = testDefinition['X-INSTANA-L in'] === '0';
-
-          const request = {
-            path: '/start',
-            headers,
-            resolveWithFullResponse: true
-          };
-          const response = await app.sendRequest(request);
-          const expectedServerTimingValue = testDefinition['Server-Timing'];
-          const actualServerTimingValue = response.headers['server-timing'];
-          if (expectedServerTimingValue && expectedServerTimingValue.includes('$')) {
-            expect(actualServerTimingValue).to.exist;
-            parseForPlaceholders(valuesForPlaceholders, expectedServerTimingValue, actualServerTimingValue);
-            expect(actualServerTimingValue).to.exist;
-            if (!http2) {
-              expect(response.rawHeaders).to.include('Server-Timing');
-            }
-          } else if (expectedServerTimingValue) {
-            expect(actualServerTimingValue).to.equal(expectedServerTimingValue);
-            if (!http2) {
-              expect(response.rawHeaders).to.include('Server-Timing');
-            }
-          }
-
-          let responseBody;
-          if (typeof response.body === 'string') {
-            responseBody = JSON.parse(response.body);
-          } else if (typeof response.body === 'object') {
-            responseBody = response.body;
-          } else {
-            throw new Error('Weird response?', response.body);
-          }
-          verifyHttpHeadersOnDownstreamRequest(testDefinition, valuesForPlaceholders, responseBody);
-
-          if (suppressed) {
-            await delay(500);
-            const spans = await agentControls.getSpans();
-            expect(spans).to.have.lengthOf(0);
-          } else {
-            await retryUntilSpansMatch(agentControls, spans => {
-              verifyHttpEntry(testDefinition, valuesForPlaceholders, spans, '/start');
-              verifyHttpExit(
-                testDefinition,
-                valuesForPlaceholders,
-                spans,
-                /^http(?:s)?:\/\/localhost:3216\/downstream$/
-              );
-            });
-          }
-        });
-      });
-    });
-  }
-});
+}
 
 function parseForPlaceholders(valuesForPlaceholders, template, value) {
   // I'm sorry, this is ugly and complicated. To ease the pain, let's follow along with an example. Assuming we have:
@@ -222,14 +200,13 @@ function parseForPlaceholders(valuesForPlaceholders, template, value) {
 
 function verifyHttpEntry(testDefinition, valuesForPlaceholders, spans, url) {
   const expectations = [
-    span => expect(span.n).to.equal('node.http.server'),
+    span => expect(span.n).to.equal('aws.lambda.entry'),
     span => expect(span.k).to.equal(constants.ENTRY),
     span => expect(span.ec).to.equal(0),
     span => expect(span.t).to.be.a('string'),
     span => expect(span.s).to.be.a('string'),
-    span => expect(span.data.http.method).to.equal('GET'),
+    span => expect(span.data.http.method).to.equal('POST'),
     span => expect(span.data.http.url).to.equal(url),
-    span => expect(span.data.http.host).to.equal(`localhost:${appPort}`),
     span => expect(span.data.http.status).to.equal(200)
   ];
 
@@ -254,7 +231,7 @@ function verifyHttpEntry(testDefinition, valuesForPlaceholders, spans, url) {
   return expectExactlyOneMatching(spans, expectations);
 }
 
-function verifyHttpExit(testDefinition, valuesForPlaceholders, spans, url) {
+function verifyHttpExit(testDefinition, valuesForPlaceholders, spans) {
   const expectations = [
     span => expect(span.n).to.equal('node.http.client'),
     span => expect(span.k).to.equal(constants.EXIT),
@@ -262,9 +239,8 @@ function verifyHttpExit(testDefinition, valuesForPlaceholders, spans, url) {
     span => expect(span.t).to.be.a('string'),
     span => expect(span.s).to.be.a('string'),
     span => expect(span.data.http.method).to.equal('GET'),
-    span => expect(span.data.http.url).to.match(url),
-    span => expect(span.data.http.status).to.equal(200),
-    span => expect(span.fp).to.not.exist
+    span => expect(span.data.http.url).to.equal(`http://localhost:${downstreamDummyPort}/`),
+    span => expect(span.data.http.status).to.equal(200)
   ];
   [
     'exitSpan.t',
@@ -324,7 +300,7 @@ function verifyHttpHeadersOnDownstreamRequest(testDefinition, valuesForPlacehold
     'traceparent out',
     'tracestate out'
   ].forEach(headerName => {
-    const actualHeaderName = headerName.slice(0, -4).toLowerCase();
+    const actualHeaderName = headerName.slice(0, -4);
     const actualValue = responseBody[actualHeaderName];
     const expectedHeaderValue = testDefinition[headerName];
     const msg = `value for outgoing HTTP header ${actualHeaderName} going downstream`;

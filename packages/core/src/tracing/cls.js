@@ -56,19 +56,25 @@ function init(config, _processIdentityProvider) {
  * type these literal objects.
  * TODO: move InstanaSpan and InstanaPseudoSpan to their own file and make them publicly accessible?
  * @typedef {Object} InstanaBaseSpan
- * @property {string} [s]
- * @property {string} [t]
- * @property {number} [k]
- * @property {string} [p]
- * @property {number} [ec]
- * @property {number} [ts]
- * @property {number} [d]
- * @property {string} [n]
- * @property {*} [stack]
+ * @property {string} [t] trace ID
+ * @property {string} [p] parent span ID
+ * @property {string} [s] span ID
+ * @property {string} [n] type/name
+ * @property {number} [k] kind
+ * @property {number} [ec] error count
+ * @property {number} [ts] timestamp
+ * @property {number} [d] duration
+ * @property {{e?: string, h?: string, hl?: boolean, cp?: string}} [f] from section
+ * @property {boolean} [tp] trace ID is from traceparent header
+ * @property {string} [lt] long trace ID
+ * @property {object} [ia] closest Instana ancestor span
+ * @property {string} [crtp] correlation type
+ * @property {string} [crid] correlation ID
+ * @property {boolean} [sy] synthetic marker
+ * @property {*} [stack] stack trace
  * @property {Object.<string, *>} [data]
- * @property {{s?: number, d?: number}} [b]
- * @property {*} [f]
- * @property {*} [gqd]
+ * @property {{s?: number, d?: number}} [b] batching information
+ * @property {*} [gqd] GraphQL destination
  * @property {Function} [transmit]
  * @property {Function} [freezePathTemplate]
  * @property {Function} [disableAutoEnd]
@@ -206,6 +212,7 @@ class InstanaPseudoSpan extends InstanaSpan {
  * @param {string} traceId
  * @param {string} parentSpanId
  * @param {import('./w3c_trace_context/W3cTraceContext')} [w3cTraceContext]
+ * @returns {InstanaSpan}
  */
 function startSpan(spanName, kind, traceId, parentSpanId, w3cTraceContext) {
   tracingMetrics.incrementOpened();

@@ -24,8 +24,19 @@ if (process.env.WITH_STDOUT) {
   app.use(morgan(`${logPrefix} (${process.pid}): :method :url :status`));
 }
 
-app.get('/', (_, res) => {
-  delay(200).then(() => res.sendStatus(200));
+app.get('/', (req, res) => {
+  const rawHeaders = req.rawHeaders.slice();
+  ['Accept', 'Accept-Encoding', 'Connection', 'Host', 'User-Agent'].forEach(headerName => {
+    const idx = rawHeaders.indexOf(headerName);
+    rawHeaders.splice(idx, 2);
+  });
+  const headersToEcho = {};
+  for (let i = 0; i < rawHeaders.length; i += 2) {
+    headersToEcho[rawHeaders[i]] = rawHeaders[i + 1];
+  }
+  delay(200).then(() => {
+    res.json(headersToEcho);
+  });
 });
 
 http.createServer(app).listen(port, error => {

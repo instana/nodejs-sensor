@@ -24,42 +24,22 @@ const downstreamDummyPort = 3456;
 const downstreamDummyUrl = `http://localhost:${downstreamDummyPort}/`;
 const instanaAgentKey = 'aws-lambda-dummy-key';
 
-function prelude(opts) {
+describe('multiple lambda handler calls', function () {
   this.timeout(config.getTestTimeout());
-
-  const env = {};
-  if (opts.instanaEndpointUrl) {
-    env.INSTANA_ENDPOINT_URL = opts.instanaEndpointUrl;
-  }
-  if (opts.instanaAgentKey) {
-    env.INSTANA_AGENT_KEY = opts.instanaAgentKey;
-  }
-  if (opts.withConfig) {
-    env.WITH_CONFIG = 'true';
-  }
-
   const control = new Control({
     faasRuntimePath: path.join(__dirname, '../runtime_mock'),
-    handlerDefinitionPath: opts.handlerDefinitionPath,
+    handlerDefinitionPath: path.join(__dirname, './lambda'),
     startBackend: true,
     backendPort,
     backendBaseUrl,
     downstreamDummyUrl,
-    env
+    env: {
+      INSTANA_ENDPOINT_URL: backendBaseUrl,
+      INSTANA_AGENT_KEY: instanaAgentKey,
+      WITH_CONFIG: 'true'
+    }
   });
   control.registerTestHooks();
-  return control;
-}
-
-describe('multiple lambda handler calls', function () {
-  const handlerDefinitionPath = path.join(__dirname, './lambda');
-
-  const opts = {
-    handlerDefinitionPath,
-    instanaEndpointUrl: backendBaseUrl,
-    instanaAgentKey
-  };
-  const control = prelude.bind(this)(opts);
 
   it('must capture metrics and spans', () =>
     control

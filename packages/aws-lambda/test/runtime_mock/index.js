@@ -40,9 +40,10 @@ function main() {
     runHandler(lambdaDefinition.handler, process.env.LAMDBA_ERROR);
   } else {
     // Wait for an explicit command to start the handler when used in the context of automated tests.
-    process.on('message', cmd => {
+    process.on('message', message => {
+      const { cmd, context, event } = message;
       if (cmd === 'run-handler') {
-        runHandler(lambdaDefinition.handler, process.env.LAMDBA_ERROR);
+        runHandler(lambdaDefinition.handler, process.env.LAMDBA_ERROR, { context, event });
       }
     });
     sendToParent('runtime: started');
@@ -76,10 +77,9 @@ function validateDefinition() {
 /**
  * Runs the given lambda handler.
  */
-function runHandler(handler, error) {
-  let context;
+function runHandler(handler, error, { context, event } = {}) {
   const trigger = process.env.LAMBDA_TRIGGER;
-  const event = createEvent(error, trigger);
+  event = event || createEvent(error, trigger);
   registerErrorHandling();
   log(`Running ${definitionPath}.`);
 
@@ -117,7 +117,7 @@ function runHandler(handler, error) {
     });
   };
 
-  context = createContext(callback);
+  context = context || createContext(callback);
   addDirectInvokeTracingCorrelationToContext(context, trigger);
 
   const promise = handler(event, context, callback);

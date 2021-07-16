@@ -93,6 +93,7 @@ let additionalInstrumentationModules = [];
 const instrumentationModules = {};
 
 exports.constants = constants;
+exports.tracingHeaders = tracingHeaders;
 exports.opentracing = opentracing;
 exports.sdk = sdk;
 exports.spanBuffer = spanBuffer;

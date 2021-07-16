@@ -92,9 +92,9 @@ Control.prototype.hasMonitoredProcessStarted = function hasMonitoredProcessStart
   return this.messagesFromFaasRuntime.indexOf('runtime: started') >= 0;
 };
 
-Control.prototype.runHandler = function runHandler() {
+Control.prototype.runHandler = function runHandler({ context, event } = {}) {
   this.startedAt = Date.now();
-  this.faasRuntime.send('run-handler');
+  this.faasRuntime.send({ cmd: 'run-handler', context, event });
   this.expectedHandlerRuns++;
   return this.waitUntilHandlerHasRun();
 };

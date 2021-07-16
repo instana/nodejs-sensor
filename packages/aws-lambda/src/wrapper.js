@@ -6,6 +6,7 @@
 'use strict';
 
 const instanaCore = require('@instana/core');
+const { tracingHeaders } = require('@instana/core').tracing;
 const { backendConnector, consoleLogger } = require('@instana/serverless');
 
 const arnParser = require('./arn');
@@ -65,12 +66,7 @@ function shimmedHandler(originalHandler, originalThis, originalArgs, _config) {
   const context = originalArgs[1];
   const lambdaCallback = originalArgs[2];
 
-  const tracingHeaders = triggers.readTraceCorrelationData(event, context);
-  const incomingTraceId = tracingHeaders.t;
-  const incomingParentSpanId = tracingHeaders.s;
-  const tracingSuppressed = tracingHeaders.l === '0';
   const arnInfo = arnParser(context);
-
   init(event, arnInfo, _config);
 
   // The AWS lambda runtime does not seem to inspect the number of arguments the handler function expects. Instead, it
@@ -82,13 +78,35 @@ function shimmedHandler(originalHandler, originalThis, originalArgs, _config) {
   // wrap the given callback _and_ return an instrumented promise.
   let handlerHasFinished = false;
   return tracing.getCls().ns.runPromiseOrRunAndReturn(() => {
+    const traceCorrelationData = triggers.readTraceCorrelationData(event, context);
+    const tracingSuppressed = traceCorrelationData.level === '0';
+    const w3cTraceContext = traceCorrelationData.w3cTraceContext;
+
     let entrySpan;
+
+    if (w3cTraceContext) {
+      // Ususally we commit the W3C trace context to CLS in start span, but in some cases (e.g. when suppressed),
+      // we don't call startSpan, so we write to CLS here unconditionally. If we also write an updated trace context
+      // later, the one written here will be overwritten.
+      tracing.getCls().setW3cTraceContext(w3cTraceContext);
+    }
+
     if (tracingSuppressed) {
       tracing.getCls().setTracingLevel('0');
+      if (w3cTraceContext) {
+        w3cTraceContext.disableSampling();
+      }
     } else {
       entrySpan = tracing
         .getCls()
-        .startSpan('aws.lambda.entry', constants.ENTRY, incomingTraceId, incomingParentSpanId);
+        .startSpan(
+          'aws.lambda.entry',
+          constants.ENTRY,
+          traceCorrelationData.traceId,
+          traceCorrelationData.parentId,
+          w3cTraceContext
+        );
+      tracingHeaders.setSpanAttributes(entrySpan, traceCorrelationData);
       const { arn, alias } = arnInfo;
       entrySpan.data.lambda = {
         arn,
