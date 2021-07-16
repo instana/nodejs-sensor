@@ -6,7 +6,7 @@
 'use strict';
 
 const constants = require('./constants');
-const tracingUtil = require('./tracingUtil');
+const { generateRandomSpanId, generateRandomTraceId, readAttribCaseInsensitive } = require('./tracingUtil');
 const w3c = require('./w3c_trace_context');
 
 let disableW3cTraceCorrelation = false;
@@ -189,7 +189,7 @@ exports.fromHeaders = function fromHeaders(headers) {
     if (!traceId || !parentId) {
       // No X-INSTANA- headers, using traceparent is disabled and there was also no in key-value pair in tracestate,
       // thus we start a new trace.
-      traceId = tracingUtil.generateRandomTraceId();
+      traceId = generateRandomTraceId();
       parentId = null;
     }
     return limitTraceId({
@@ -214,16 +214,13 @@ exports.fromHeaders = function fromHeaders(headers) {
         usedTraceParent: false,
         level,
         synthetic,
-        w3cTraceContext: w3c.createEmptyUnsampled(
-          tracingUtil.generateRandomTraceId(),
-          tracingUtil.generateRandomSpanId()
-        )
+        w3cTraceContext: w3c.createEmptyUnsampled(generateRandomTraceId(), generateRandomSpanId())
       });
     } else {
       // Neither X-INSTANA- headers nor W3C trace context headers are present and tracing is not suppressed
       // via X-INSTANA-L. Start a new trace, that is, generate a trace ID and use it for for our trace ID as well as in
       // the W3C trace context.
-      xInstanaT = tracingUtil.generateRandomTraceId();
+      xInstanaT = generateRandomTraceId();
       // We create a new dummy W3C trace context with an invalid parent ID, as we have no parent ID yet. Later, in
       // cls.startSpan, we will update it so it gets the parent ID of the entry span we create there. The bogus
       // parent ID "000..." will never be transmitted to any other service.
@@ -247,7 +244,7 @@ exports.fromHeaders = function fromHeaders(headers) {
  * @returns {string | Array.<string>}
  */
 function readInstanaTraceId(headers) {
-  const xInstanaT = headers[constants.traceIdHeaderNameLowerCase];
+  const xInstanaT = readAttribCaseInsensitive(headers, constants.traceIdHeaderNameLowerCase);
   if (xInstanaT == null) {
     return null;
   }
@@ -259,7 +256,7 @@ function readInstanaTraceId(headers) {
  * @returns {string | Array.<string>}
  */
 function readInstanaParentId(headers) {
-  const xInstanaS = headers[constants.spanIdHeaderNameLowerCase];
+  const xInstanaS = readAttribCaseInsensitive(headers, constants.spanIdHeaderNameLowerCase);
   if (xInstanaS == null) {
     return null;
   }
@@ -270,7 +267,7 @@ function readInstanaParentId(headers) {
  * @param {import('http').IncomingHttpHeaders} headers
  */
 function readLevelAndCorrelation(headers) {
-  const xInstanaL = headers[constants.traceLevelHeaderNameLowerCase];
+  const xInstanaL = readAttribCaseInsensitive(headers, constants.traceLevelHeaderNameLowerCase);
   if (xInstanaL == null) {
     // fast path for when we did not receive the header at all
     return {};
@@ -325,7 +322,7 @@ function isSuppressed(level) {
  * @param {import('http').IncomingHttpHeaders} headers
  */
 function readSyntheticMarker(headers) {
-  return headers[constants.syntheticHeaderNameLowerCase] === '1';
+  return readAttribCaseInsensitive(headers, constants.syntheticHeaderNameLowerCase) === '1';
 }
 
 /**
@@ -340,10 +337,10 @@ function traceStateHasInstanaKeyValuePair(w3cTraceContext) {
  * @param {import('http').IncomingHttpHeaders} headers
  */
 function readW3cTraceContext(headers) {
-  const traceParent = /** @type {string} */ (headers[constants.w3cTraceParent]);
+  const traceParent = /** @type {string} */ (readAttribCaseInsensitive(headers, constants.w3cTraceParent));
   // The spec mandates that multiple tracestate headers should be treated by concatenating them. Node.js' http core
   // library takes care of that already.
-  const traceState = /** @type {string} */ (headers[constants.w3cTraceState]);
+  const traceState = /** @type {string} */ (readAttribCaseInsensitive(headers, constants.w3cTraceState));
   let traceContext;
   if (traceParent) {
     traceContext = w3c.parse(traceParent, traceState);
@@ -371,3 +368,27 @@ function limitTraceId(result) {
   }
   return result;
 }
+
+/**
+ * Takes the result of fromHttpReques/fromHeaders and sets the required attributes on the span.
+ * @param {import('./cls').InstanaBaseSpan} span
+ * @param {TracingHeaders} tracingHeaders
+ */
+exports.setSpanAttributes = function (span, tracingHeaders) {
+  if (tracingHeaders.correlationType && tracingHeaders.correlationId) {
+    span.crtp = tracingHeaders.correlationType;
+    span.crid = tracingHeaders.correlationId;
+  }
+  if (tracingHeaders.instanaAncestor) {
+    span.ia = tracingHeaders.instanaAncestor;
+  }
+  if (tracingHeaders.longTraceId) {
+    span.lt = tracingHeaders.longTraceId;
+  }
+  if (tracingHeaders.usedTraceParent) {
+    span.tp = true;
+  }
+  if (tracingHeaders.synthetic) {
+    span.sy = true;
+  }
+};

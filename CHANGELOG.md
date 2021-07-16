@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- [AWS Lambda] Add W3C trace context support for Lambda tracing.
+
 ## 1.129.0
 - Bring back `applicationUnderMonitoring#getMainPackageJson` and `applicationUnderMonitoring#getMainPackageJsonPath` for backward compatibility.
 - AWS SDK v3: Instrumentation of S3

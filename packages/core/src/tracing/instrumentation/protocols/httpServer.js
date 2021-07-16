@@ -59,7 +59,7 @@ function shimEmit(realEmit) {
 
       if (w3cTraceContext) {
         // Ususally we commit the W3C trace context to CLS in start span, but in some cases (e.g. when suppressed),
-        // we don't call startSpan, so we write to CLS here unconditionally. If we also write an update trace context
+        // we don't call startSpan, so we write to CLS here unconditionally. If we also write an updated trace context
         // later, the one written here will be overwritten.
         cls.setW3cTraceContext(w3cTraceContext);
       }
@@ -71,23 +71,7 @@ function shimEmit(realEmit) {
       }
 
       const span = cls.startSpan(exports.spanName, constants.ENTRY, headers.traceId, headers.parentId, w3cTraceContext);
-
-      if (headers.correlationType && headers.correlationId) {
-        span.crtp = headers.correlationType;
-        span.crid = headers.correlationId;
-      }
-      if (headers.instanaAncestor) {
-        span.ia = headers.instanaAncestor;
-      }
-      if (headers.longTraceId) {
-        span.lt = headers.longTraceId;
-      }
-      if (headers.usedTraceParent) {
-        span.tp = true;
-      }
-      if (headers.synthetic) {
-        span.sy = true;
-      }
+      tracingHeaders.setSpanAttributes(span, headers);
 
       // Capture the URL before application code gets access to the incoming message. Libraries like express manipulate
       // req.url when routers are used.

@@ -175,6 +175,9 @@ exports.shortenDatabaseStatement = function shortenDatabaseStatement(stmt) {
 };
 
 /**
+ * Iterates over all attributes of the given object and returns the first attribute for which the name matches the given
+ * name in a case insensitive fashion, or null if no such attribute exists.
+ *
  * @param {*} object
  * @param {string} key
  * @returns {*}
@@ -182,6 +185,10 @@ exports.shortenDatabaseStatement = function shortenDatabaseStatement(stmt) {
 exports.readAttribCaseInsensitive = function readAttribCaseInsensitive(object, key) {
   if (!object || typeof object !== 'object' || typeof key !== 'string') {
     return null;
+  }
+  if (object[key]) {
+    // fast path for cases where case insensitive search is not required
+    return object[key];
   }
   const keyUpper = key.toUpperCase();
   const allKeys = Object.keys(object);

@@ -78,7 +78,7 @@ function shimEmit(realEmit) {
 
       if (w3cTraceContext) {
         // Ususally we commit the W3C trace context to CLS in start span, but in some cases (e.g. when suppressed),
-        // we don't call startSpan, so we write to CLS here unconditionally. If we also write an update trace context
+        // we don't call startSpan, so we write to CLS here unconditionally. If we also write an updated trace context
         // later, the one written here will be overwritten.
         cls.setW3cTraceContext(w3cTraceContext);
       }
@@ -96,23 +96,7 @@ function shimEmit(realEmit) {
         processedHeaders.parentId,
         w3cTraceContext
       );
-
-      if (processedHeaders.correlationType && processedHeaders.correlationId) {
-        span.crtp = processedHeaders.correlationType;
-        span.crid = processedHeaders.correlationId;
-      }
-      if (processedHeaders.instanaAncestor) {
-        span.ia = processedHeaders.instanaAncestor;
-      }
-      if (processedHeaders.longTraceId) {
-        span.lt = processedHeaders.longTraceId;
-      }
-      if (processedHeaders.usedTraceParent) {
-        span.tp = true;
-      }
-      if (processedHeaders.synthetic) {
-        span.sy = true;
-      }
+      tracingHeaders.setSpanAttributes(span, headers);
 
       const authority = headers[HTTP2_HEADER_AUTHORITY];
       const path = headers[HTTP2_HEADER_PATH] || '/';

@@ -5,7 +5,7 @@
 
 'use strict';
 
-const { constants: tracingConstants, util: tracingUtil } = require('@instana/core').tracing;
+const { constants: tracingConstants, tracingHeaders, util: tracingUtil } = require('@instana/core').tracing;
 const { secrets } = require('@instana/core');
 const zlib = require('zlib');
 
@@ -63,7 +63,7 @@ function isApiGatewayProxyTrigger(event) {
 }
 
 function extractHttpFromApiGatewwayProxyEvent(event, span) {
-  // Remark: We never extract host headers for Lambda entries even if we could some times, because they are of no
+  // Remark: We never extract host headers for Lambda entries even if we could sometimes, because they are of no
   // interest.
   span.data.http = {
     method: event.httpMethod,
@@ -219,11 +219,6 @@ function isInvokeFunction(context) {
 exports.readTraceCorrelationData = function readTraceCorrelationData(event, context) {
   let traceCorrelationData;
 
-  traceCorrelationData = readTraceCorrelationFromHttpHeaders(event);
-  if (hasFoundTraceCorrelationData(traceCorrelationData)) {
-    return traceCorrelationData;
-  }
-
   traceCorrelationData = readTraceCorrelationFromClientContextCustom(context);
   if (hasFoundTraceCorrelationData(traceCorrelationData)) {
     return traceCorrelationData;
@@ -234,22 +229,25 @@ exports.readTraceCorrelationData = function readTraceCorrelationData(event, cont
     return traceCorrelationData;
   }
 
+  // readTraceCorrelationFromHttpHeaders will always return values as long as there is a headers attribute of type
+  // object, even if no Instana headers are present (because it uses tracingHeaders.fromHeaders under the hood).
+  // Therefore readTraceCorrelationFromHttpHeaders should come last, after checking all other sources of trace
+  // correlation (client context, SQS, ...).
+  traceCorrelationData = readTraceCorrelationFromHttpHeaders(event);
+  if (hasFoundTraceCorrelationData(traceCorrelationData)) {
+    return traceCorrelationData;
+  }
+
   // No trace correlation data has been found, so we return an empty object. This implies that a new trace will be
   // started.
   return {};
 };
 
 function readTraceCorrelationFromHttpHeaders(event) {
-  const traceCorrelationData = {};
   if (event.headers && typeof event.headers === 'object') {
-    traceCorrelationData.t = tracingUtil.readAttribCaseInsensitive(event.headers, tracingConstants.traceIdHeaderName);
-    traceCorrelationData.s = tracingUtil.readAttribCaseInsensitive(event.headers, tracingConstants.spanIdHeaderName);
-    traceCorrelationData.l = tracingUtil.readAttribCaseInsensitive(
-      event.headers,
-      tracingConstants.traceLevelHeaderName
-    );
+    return tracingHeaders.fromHeaders(event.headers);
   }
-  return traceCorrelationData;
+  return {};
 }
 
 function readClientContextCustom(context) {
@@ -266,13 +264,13 @@ function readTraceCorrelationFromClientContextCustom(context) {
   const custom = readClientContextCustom(context);
   if (custom) {
     if (custom[tracingConstants.traceLevelHeaderNameLowerCase]) {
-      traceCorrelationData.l = custom[tracingConstants.traceLevelHeaderNameLowerCase];
+      traceCorrelationData.level = custom[tracingConstants.traceLevelHeaderNameLowerCase];
     }
     if (custom[tracingConstants.spanIdHeaderNameLowerCase]) {
-      traceCorrelationData.s = custom[tracingConstants.spanIdHeaderNameLowerCase];
+      traceCorrelationData.parentId = custom[tracingConstants.spanIdHeaderNameLowerCase];
     }
     if (custom[tracingConstants.traceIdHeaderNameLowerCase]) {
-      traceCorrelationData.t = custom[tracingConstants.traceIdHeaderNameLowerCase];
+      traceCorrelationData.traceId = custom[tracingConstants.traceIdHeaderNameLowerCase];
     }
   }
   return traceCorrelationData;
@@ -319,17 +317,17 @@ function readTraceCorrelationFromSqs(event) {
 
 function readTraceCorrelationFromSqsAttributes(attributes) {
   const traceCorrelationData = {};
-  traceCorrelationData.t = readSqsMessageAttributeWithFallback(
+  traceCorrelationData.traceId = readSqsMessageAttributeWithFallback(
     attributes,
     tracingConstants.sqsAttributeNames.TRACE_ID,
     tracingConstants.sqsAttributeNames.LEGACY_TRACE_ID
   );
-  traceCorrelationData.s = readSqsMessageAttributeWithFallback(
+  traceCorrelationData.parentId = readSqsMessageAttributeWithFallback(
     attributes,
     tracingConstants.sqsAttributeNames.SPAN_ID,
     tracingConstants.sqsAttributeNames.LEGACY_SPAN_ID
   );
-  traceCorrelationData.l = readSqsMessageAttributeWithFallback(
+  traceCorrelationData.level = readSqsMessageAttributeWithFallback(
     attributes,
     tracingConstants.sqsAttributeNames.LEVEL,
     tracingConstants.sqsAttributeNames.LEGACY_LEVEL
@@ -354,5 +352,5 @@ function readSqsStringMessageAttribute(messageAttributes, key) {
 }
 
 function hasFoundTraceCorrelationData(traceCorrelationData) {
-  return traceCorrelationData.t || traceCorrelationData.s || traceCorrelationData.l;
+  return traceCorrelationData.traceId || traceCorrelationData.parentId || traceCorrelationData.level;
 }
